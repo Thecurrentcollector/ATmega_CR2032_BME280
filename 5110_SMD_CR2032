@@ -1,0 +1,182 @@
+#include <Wire.h>
+#include <Adafruit_BME280.h>
+#include <SPI.h>
+#include <LowPower.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_PCD8544.h>
+#include <avr/io.h>
+
+//---------------------------------------------------INIT----------------------------------------------------------------
+// Initialize LCD object for hardware SPI
+// Adafruit_PCD8544(D/C,CE,RST);
+Adafruit_PCD8544 display = Adafruit_PCD8544(7, 6, 5);
+
+//Initialize BME280
+#define BME_280_I2C_ADDRESS 0x76
+Adafruit_BME280 bme280;
+
+
+//---------------------------------------------------VARIABLER----------------------------------------------------------------
+
+float temp;
+float pressure;
+float humidity;
+float batteryVoltage;
+byte wakeCounter = 15;
+
+// 'baroGraph', 8x12px
+const unsigned char baroGraph [] PROGMEM = {
+  0x07, 0x21, 0x21, 0x23, 0x21, 0x21, 0x23, 0xf9, 0x71, 0x23, 0x01, 0x07
+};
+
+// 'temp', 6x14px
+const unsigned char tempGraph [] PROGMEM = {
+  0x30, 0x48, 0x58, 0x48, 0x58, 0x48, 0x58, 0x48, 0x58, 0x48, 0x84, 0x84, 0x84, 0x78
+};
+
+// 'deg', 7x7px
+const unsigned char deg [] PROGMEM = {
+  0x38, 0x7c, 0xc6, 0xc6, 0xc6, 0x7c, 0x38
+};
+
+// 'humidity', 6x11px
+const unsigned char humidityGraph [] PROGMEM = {
+  0x20, 0x50, 0x88, 0x88, 0x70, 0x00, 0x10, 0x28, 0x44, 0x44, 0x38
+};
+
+// 'hPa', 10x6px
+const unsigned char hpa [] PROGMEM = {
+  0x8e, 0x00, 0x8a, 0x00, 0x8e, 0x00, 0xe8, 0xc0, 0xa9, 0x40, 0xa8, 0xc0
+};
+
+//---------------------------------------------------FUNKSJONER----------------------------------------------------------------
+//Displaytegning: Temperatur, trykk og spenning
+
+void displayTemp()  {
+  display.setTextColor(BLACK);
+  display.setTextSize(2);
+  display.drawBitmap(1, 0, tempGraph, 6, 14, BLACK);
+  display.setCursor(14, 0);
+  display.print(temp, 1); display.drawBitmap(64, 0, deg, 7, 7, BLACK);
+  
+}
+
+void displayPressure()  {
+  display.setTextColor(BLACK);
+  display.setTextSize(2);
+  display.drawBitmap(0, 16, baroGraph, 8, 12, BLACK);
+  display.setCursor(14, 15);
+  if (pressure <= 1000) {
+    display.print(pressure, 1); display.drawBitmap(74, 23, hpa, 10, 6, BLACK);  //Ikke nok plass på display til 4 siffer komma siffer
+  }
+  else {
+    display.print(pressure, 1);
+  }
+}
+
+void displayHumidity() {
+  display.setTextColor(BLACK);
+  display.setTextSize(2);
+  display.drawBitmap(2, 34, humidityGraph, 6, 11, BLACK);
+  display.setCursor(10, 33);
+  display.print(int(humidity)); display.print("%");
+}
+
+void displayBattery() {
+  display.setTextColor(BLACK);
+  display.setTextSize(2);
+  display.setCursor(49,33);
+  display.print(batteryVoltage,1);
+}
+
+void bme280Sleep() {
+  Wire.beginTransmission(BME_280_I2C_ADDRESS);
+  Wire.write(0xF4);
+  Wire.write(0x48);
+  Wire.endTransmission();
+}
+
+void bme280Wake() {
+  Wire.beginTransmission(BME_280_I2C_ADDRESS);
+  Wire.write(0xF4);
+  Wire.write(0x4B);
+  Wire.endTransmission();
+}
+
+float readBattery();        //Prototype
+
+//---------------------------------------------------SETUP----------------------------------------------------------------
+void setup() {
+
+  Wire.begin();
+
+  //BME280 setup
+  bme280.begin(BME_280_I2C_ADDRESS);
+
+  //Display kontrast, rotasjon,
+  display.begin();
+  display.setContrast(57);
+  display.setRotation(2);
+  display.setTextWrap(false);
+  display.clearDisplay();
+  
+}
+
+//---------------------------------------------------LOOP----------------------------------------------------------------
+void loop() {
+
+wakeCounter++;
+
+if (wakeCounter > 15) {
+ 
+  wakeCounter = 0;
+  
+  bme280Wake();
+    
+  delay(50);
+
+  temp = bme280.readTemperature();
+  pressure = (bme280.readPressure() / 100.0F);              //Gjør om trykk i floating point Pascal til floating point hPa (100.0F = float 100.0)
+  humidity = bme280.readHumidity();
+  batteryVoltage = readBattery();
+
+  display.clearDisplay();
+  displayTemp();
+  displayPressure();
+  displayHumidity();
+  displayBattery();
+  
+  display.drawFastVLine(46, 32, 16, BLACK);
+  display.drawFastHLine(0, 30, 84, BLACK);
+  
+  display.display();
+
+  bme280Sleep();
+  }
+  
+  LowPower.powerDown(SLEEP_8S, ADC_OFF, BOD_OFF);
+}
+
+
+//----------------------------------------------------readBattery();----------------------------------------------------
+
+float readBattery() {
+  
+  ADMUX = (1<<REFS0)|(1<<MUX3)|(1<<MUX2)|(1<<MUX1);        //REFS0 to set Vcc as voltage reference. MUX 3:1 to set Vbg as input channel
+  ADCSRA = (1<<ADEN)|(1<<ADPS2)|(1<<ADPS1);                //ADC on, prescaler 64 for a 125 kHz ADC clock.
+  
+  delay(1);                                                //The input needs time to settle down to Vbg.
+
+  for (byte i = 0; i < 10; i++) {                          //I discard 10 readings to be sure.
+    ADCSRA |= (1<<ADSC);
+    while (ADCSRA & (1<<ADSC)) {}
+  }
+
+  ADCSRA |= (1<<ADSC);                                     //Start conversion
+  while (ADCSRA & (1<<ADSC)) {}                            //Wait for it to finish
+  
+  float batteryVoltage = 1104.0 / ADC;                           //Magic number 1104 is 1.079V * 1024 ADC steps.
+                                                           //ADC is a nice macro that will return a 16-bit number with ADCH and ADCL combined, saving me some code. (see avr/iom328p.h)
+
+return batteryVoltage;                                     //Returns volts as a decimal number
+}
